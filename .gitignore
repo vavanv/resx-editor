@@ -1,5 +1,7 @@
+package-lock.json
+yarn.lock
+
 # Dependencies
-node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -8,6 +10,9 @@ yarn-error.log*
 dist/
 build/
 release/
+coverage/
+node_modules/
+
 *.tsbuildinfo
 
 # Environment variables
@@ -32,9 +37,6 @@ release/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Coverage directory used by tools like istanbul
-coverage/
 
 # nyc test coverage
 .nyc_output

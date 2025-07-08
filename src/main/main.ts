@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { isDev } from './util';
@@ -26,12 +26,58 @@ function createWindow(): void {
   }
 }
 
+function createMenu() {
+  // To completely remove the menu
+  Menu.setApplicationMenu(null);
+  
+  // OR to create a custom menu:
+  /*
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        { role: 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    }
+  ];
+  
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+  */
+}
+
 app.whenReady().then(() => {
-  createWindow()
+  createWindow();
+  createMenu();
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
 })
 
 app.on('window-all-closed', function () {

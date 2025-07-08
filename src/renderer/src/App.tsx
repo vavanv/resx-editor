@@ -1,516 +1,515 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useCallback } from 'react';
 import {
-  AppBar,
-  Toolbar,
-  Typography,
-  Button,
   Container,
+  Typography,
   Box,
-  TextField,
-  Snackbar,
+  ThemeProvider,
+  createTheme,
+  CssBaseline,
+  Paper,
   Alert,
-  CircularProgress,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-} from "@mui/material";
-import {
-  Save as SaveIcon,
-  FolderOpen as FolderOpenIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Edit as EditIcon,
-} from "@mui/icons-material";
-import {
-  DataGrid,
-  GridColDef,
-  GridActionsCellItem,
-  GridRowParams,
-} from "@mui/x-data-grid";
-import { XMLParser } from "fast-xml-parser";
+  Button,
+  IconButton,
+} from '@mui/material';
+import { Close } from '@mui/icons-material';
+import { FileUpload } from './components/FileUpload';
+import { FileGroupTabs } from './components/FileGroupTabs';
+import { FileSubTabs } from './components/FileSubTabs';
+import { ResxDataGrid } from './components/ResxDataGrid';
+import { DownloadButton } from './components/DownloadButton';
+import { GridRow, FileTab, FileGroup } from './types/resx';
+import { parseResxFile } from './utils/xmlParser';
+import { groupFilesByBaseName, parseFileName } from './utils/fileGrouping';
+import { downloadResxFile } from './utils/downloadUtils';
 
-interface ResxEntry {
-  "@_name": string;
-  value: string;
-  comment?: string;
-}
-
-// Not used in the current implementation, but kept for future use
-// interface ResxData {
-//   root: {
-//     data: ResxEntry[];
-//   };
-// }
-
-declare global {
-  interface Window {
-    electronAPI: {
-      openFileDialog: () => Promise<string | null>;
-      readFile: (
-        path: string
-      ) => Promise<{ success: boolean; data?: string; error?: string }>;
-      writeFile: (
-        path: string,
-        content: string
-      ) => Promise<{ success: boolean; error?: string }>;
-    };
-  }
-}
-
-const RESX_TEMPLATE = `<?xml version="1.0" encoding="utf-8"?>
-<root>
-  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
-    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
-    <xsd:element name="root" msdata:IsDataSet="true">
-      <xsd:complexType>
-        <xsd:choice maxOccurs="unbounded">
-          <xsd:element name="data">
-            <xsd:complexType>
-              <xsd:sequence>
-                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
-                <xsd:element name="comment" type="xsd:string" minOccurs="0" />
-              </xsd:sequence>
-              <xsd:attribute name="name" type="xsd:string" use="required" />
-              <xsd:attribute name="type" type="xsd:string" />
-              <xsd:attribute name="mimetype" type="xsd:string" />
-            </xsd:complexType>
-          </xsd:element>
-        </xsd:complexType>
-      </xsd:element>
-    </xsd:element>
-  </xsd:schema>
-  <resheader name="resmimetype">
-    <value>text/microsoft-resx</value>
-  </resheader>
-  <resheader name="version">
-    <value>2.0</value>
-  </resheader>
-  <resheader name="reader">
-    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
-  </resheader>
-  <resheader name="writer">
-    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
-  </resheader>
-</root>`;
-
-const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: "@_",
-  isArray: (name) => name === "data",
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#1976d2',
+    },
+    secondary: {
+      main: '#dc004e',
+    },
+    background: {
+      default: '#f5f5f5',
+    },
+  },
+  typography: {
+    h4: {
+      fontWeight: 600,
+    },
+    h6: {
+      fontWeight: 500,
+    },
+  },
+  components: {
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          borderRadius: 8,
+        },
+      },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          borderRadius: 12,
+        },
+      },
+    },
+  },
 });
 
 function App() {
-  const [entries, setEntries] = useState<ResxEntry[]>([]);
-  const [currentFile, setCurrentFile] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [snackbar, setSnackbar] = useState({
-    open: false,
-    message: "",
-    severity: "success",
-  });
-  const [editingEntry, setEditingEntry] = useState<{
-    index: number;
-    entry: ResxEntry;
-  } | null>(null);
+  const [tabs, setTabs] = useState<FileTab[]>([]);
+  const [groups, setGroups] = useState<FileGroup[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  const [error, setError] = useState<string>('');
+  const [debugDialogOpen, setDebugDialogOpen] = useState<boolean>(false);
 
-  const showMessage = (message: string, severity = "success") => {
-    setSnackbar({ open: true, message, severity });
-  };
+  const generateTabId = () => `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  const handleCloseSnackbar = () => {
-    setSnackbar((prev) => ({ ...prev, open: false }));
-  };
-
-  const loadResxFile = async (filePath: string) => {
-    try {
-      setIsLoading(true);
-      const result = await window.electronAPI.readFile(filePath);
-
-      if (result.success && result.data) {
-        const parsed = parser.parse(result.data);
-        setEntries(parsed.root.data || []);
-        setCurrentFile(filePath);
-        showMessage("File loaded successfully");
-      } else {
-        throw new Error(result.error || "Failed to load file");
-      }
-    } catch (error: any) {
-      console.error("Error loading file:", error);
-      showMessage(`Error: ${error?.message || "Unknown error"}`, "error");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleOpenFile = async () => {
-    try {
-      const filePath = await window.electronAPI.openFileDialog();
-      if (filePath) {
-        await loadResxFile(filePath);
-      }
-    } catch (error: any) {
-      console.error("Error opening file:", error);
-      showMessage(`Error: ${error?.message || "Unknown error"}`, "error");
-    }
-  };
-
-  const handleSaveFile = async () => {
-    if (!currentFile) return;
-
-    try {
-      setIsLoading(true);
-      const result = await window.electronAPI.writeFile(
-        currentFile,
-        buildResxContent(entries)
+  // Simple function to update groups from tabs
+  const updateGroupsFromTabs = useCallback(
+    (newTabs: FileTab[]) => {
+      console.log('🔄 === UPDATING GROUPS ===');
+      console.log(
+        '📥 Input tabs for grouping:',
+        newTabs.map(t => ({
+          id: t.id,
+          fileName: t.fileName,
+          baseFileName: t.baseFileName,
+          language: t.language,
+        })),
       );
 
-      if (result.success) {
-        showMessage("File saved successfully");
-      } else {
-        throw new Error(result.error || "Failed to save file");
+      const newGroups = groupFilesByBaseName(newTabs);
+      console.log(
+        '📊 Generated groups result:',
+        newGroups.map(g => ({
+          id: g.id,
+          baseFileName: g.baseFileName,
+          fileCount: g.files.length,
+          activeFileId: g.activeFileId,
+          files: g.files.map(f => ({
+            fileName: f.fileName,
+            language: f.language,
+            id: f.id,
+          })),
+        })),
+      );
+
+      setGroups(newGroups);
+
+      // Update active selections if needed
+      if (newGroups.length === 0) {
+        console.log('❌ No groups, clearing active selections');
+        setActiveGroupId(null);
+        setActiveFileId(null);
+      } else if (!activeGroupId || !newGroups.find(g => g.id === activeGroupId)) {
+        // If no active group or current group doesn't exist, set first group as active
+        const firstGroup = newGroups[0];
+        console.log('🎯 Setting active group to:', firstGroup.id);
+        console.log('🎯 Setting active file to:', firstGroup.activeFileId);
+        setActiveGroupId(firstGroup.id);
+        setActiveFileId(firstGroup.activeFileId);
       }
-    } catch (error: any) {
-      console.error("Error saving file:", error);
-      showMessage(`Error: ${error?.message || "Unknown error"}`, "error");
-    } finally {
-      setIsLoading(false);
+
+      return newGroups;
+    },
+    [activeGroupId],
+  );
+
+  const handleUploadStart = useCallback(() => {
+    console.log('🔄 === RESETTING SESSION ===');
+    console.log('🗑️ Clearing all tabs, groups, and active selections...');
+
+    setTabs([]);
+    setGroups([]);
+    setActiveGroupId(null);
+    setActiveFileId(null);
+    setError('');
+
+    console.log('✅ Session reset completed');
+  }, []);
+
+  const handleDebugClick = useCallback(() => {
+    setDebugDialogOpen(true);
+  }, []);
+
+  const handleDebugClose = useCallback(() => {
+    setDebugDialogOpen(false);
+  }, []);
+
+  const handleFileUpload = useCallback((content: string, fileName: string) => {
+    console.log('\n🚀 === HANDLE FILE UPLOAD ===');
+    console.log('📤 Processing file:', fileName);
+    console.log('📏 Content length:', content?.length || 0);
+
+    try {
+      setError('');
+
+      console.log('🔍 Parsing RESX content...');
+      const resxData = parseResxFile(content);
+      console.log('📊 Parsed entries count:', resxData.entries.length);
+      console.log(
+        '📋 Sample entries:',
+        resxData.entries.slice(0, 3).map(e => ({ name: e.name, value: e.value?.substring(0, 50) })),
+      );
+
+      const gridRows: GridRow[] = resxData.entries.map((entry, index) => ({
+        id: `${entry.name}-${index}`,
+        name: entry.name,
+        value: entry.value,
+        comment: entry.comment || '',
+      }));
+      console.log('🎯 Created grid rows:', gridRows.length);
+
+      const { baseFileName, language } = parseFileName(fileName);
+      console.log('📝 Filename parsing result:', {
+        fileName,
+        baseFileName,
+        language,
+      });
+
+      const newTab: FileTab = {
+        id: generateTabId(),
+        fileName,
+        originalFileName: fileName,
+        rows: gridRows,
+        hasChanges: false,
+        baseFileName,
+        language,
+      };
+
+      console.log('🔍 New tab baseFileName and language:', {
+        baseFileName: newTab.baseFileName,
+        language: newTab.language,
+      });
+
+      console.log('✅ Created new tab:', {
+        id: newTab.id,
+        fileName: newTab.fileName,
+        baseFileName: newTab.baseFileName,
+        language: newTab.language,
+        rowCount: newTab.rows.length,
+      });
+
+      // Use functional update to avoid race conditions with multiple file uploads
+      setTabs(prevTabs => {
+        console.log(
+          '📋 Current tabs before addition:',
+          prevTabs.map(t => ({
+            fileName: t.fileName,
+            baseFileName: t.baseFileName,
+            language: t.language,
+          })),
+        );
+
+        const newTabs = [...prevTabs, newTab];
+        console.log(
+          '📋 All tabs after addition:',
+          newTabs.map(t => ({
+            id: t.id,
+            fileName: t.fileName,
+            baseFileName: t.baseFileName,
+            language: t.language,
+          })),
+        );
+
+        // Update groups and set active selections
+        setTimeout(() => {
+          const newGroups = groupFilesByBaseName(newTabs);
+          setGroups(newGroups);
+
+          // Set this as active if it's the first file or if no active group
+          setActiveGroupId(currentActiveGroupId => {
+            if (!currentActiveGroupId) {
+              const targetGroup = newGroups.find(g => g.baseFileName === baseFileName);
+              if (targetGroup) {
+                console.log('🎯 Setting active group and file:', targetGroup.id, newTab.id);
+                setActiveFileId(newTab.id);
+                return targetGroup.id;
+              }
+            }
+            return currentActiveGroupId;
+          });
+        }, 0);
+
+        return newTabs;
+      });
+
+      console.log('✅ File upload completed successfully');
+    } catch (err) {
+      const errorMessage = `Error parsing ${fileName}. Please ensure it's a valid .resx file.`;
+      setError(errorMessage);
+      console.error('❌ Parse error:', err);
+      console.error('❌ Error details:', {
+        fileName,
+        contentLength: content?.length,
+        errorMessage: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
-  };
+  }, []);
 
-  const buildResxContent = (data: ResxEntry[]): string => {
-    const entriesXml = data
-      .map((entry) => {
-        const comment = entry.comment
-          ? `\n    <comment>${escapeXml(entry.comment)}</comment>`
-          : "";
-        return `  <data name="${escapeXml(
-          entry["@_name"]
-        )}" xml:space="preserve">\n    <value>${escapeXml(
-          entry.value
-        )}</value>${comment}\n  </data>`;
-      })
-      .join("\n");
+  const handleGroupChange = useCallback(
+    (groupId: string) => {
+      console.log('🔄 Group changed to:', groupId);
+      setActiveGroupId(groupId);
+      const group = groups.find(g => g.id === groupId);
+      if (group && group.files.length > 0) {
+        const fileId = group.activeFileId || group.files[0].id;
+        console.log('📁 Setting active file to:', fileId);
+        setActiveFileId(fileId);
+      }
+    },
+    [groups],
+  );
 
-    return RESX_TEMPLATE.replace("</root>", `${entriesXml}\n</root>`);
-  };
+  const handleFileChange = useCallback((fileId: string) => {
+    console.log('📄 File changed to:', fileId);
+    setActiveFileId(fileId);
 
-  const escapeXml = (unsafe: string): string => {
-    return unsafe
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&apos;");
-  };
+    // Update the active file in the group
+    setGroups(prevGroups =>
+      prevGroups.map(group => {
+        const fileInGroup = group.files.find(f => f.id === fileId);
+        if (fileInGroup) {
+          console.log('🔄 Updating active file in group:', group.id, 'to:', fileId);
+          return { ...group, activeFileId: fileId };
+        }
+        return group;
+      }),
+    );
+  }, []);
 
-  const handleAddEntry = () => {
-    setEditingEntry({
-      index: -1,
-      entry: { "@_name": "", value: "", comment: "" },
-    });
-  };
+  const handleRowsChange = useCallback(
+    (newRows: GridRow[]) => {
+      if (!activeFileId) return;
 
-  const handleEditEntry = (index: number) => {
-    setEditingEntry({ index, entry: { ...entries[index] } });
-  };
+      setTabs(prevTabs => {
+        const updatedTabs = prevTabs.map(tab => {
+          if (tab.id === activeFileId) {
+            // Check if there are actual changes by comparing with original
+            const hasChanges = JSON.stringify(newRows) !== JSON.stringify(tab.rows);
+            return {
+              ...tab,
+              rows: newRows,
+              hasChanges,
+            };
+          }
+          return tab;
+        });
 
-  const handleDeleteEntry = (index: number) => {
-    const newEntries = [...entries];
-    newEntries.splice(index, 1);
-    setEntries(newEntries);
-    showMessage("Entry deleted");
-  };
+        // Update groups to reflect changes using the updated tabs
+        setTimeout(() => {
+          updateGroupsFromTabs(updatedTabs);
+        }, 0);
 
-  const handleSaveEntry = () => {
-    if (!editingEntry) return;
+        return updatedTabs;
+      });
+    },
+    [activeFileId, updateGroupsFromTabs],
+  );
 
-    const newEntries = [...entries];
-    if (editingEntry.index >= 0 && editingEntry.index < newEntries.length) {
-      newEntries[editingEntry.index] = editingEntry.entry;
-    } else {
-      newEntries.push(editingEntry.entry);
+  const activeGroup = groups.find(group => group.id === activeGroupId);
+  const activeFile = activeGroup?.files.find(file => file.id === activeFileId);
+
+  const handleDownloadCurrentFile = useCallback(() => {
+    if (activeFile) {
+      downloadResxFile(activeFile.rows, activeFile.originalFileName);
     }
+  }, [activeFile]);
 
-    setEntries(newEntries);
-    setEditingEntry(null);
-    showMessage("Entry saved");
-  };
-
-  const columns: GridColDef[] = useMemo(
-    () => [
-      {
-        field: "name",
-        headerName: "Name",
-        width: 200,
-        editable: false,
-      },
-      {
-        field: "value",
-        headerName: "Value",
-        width: 400,
-        editable: false,
-        renderCell: (params) => (
-          <Box
-            sx={{
-              whiteSpace: "normal",
-              wordWrap: "break-word",
-              lineHeight: 1.2,
-              py: 1,
-            }}
-          >
-            {params.value}
-          </Box>
-        ),
-      },
-      {
-        field: "comment",
-        headerName: "Comment",
-        width: 300,
-        editable: false,
-        renderCell: (params) => (
-          <Box
-            sx={{
-              whiteSpace: "normal",
-              wordWrap: "break-word",
-              lineHeight: 1.2,
-              py: 1,
-            }}
-          >
-            {params.value || "-"}
-          </Box>
-        ),
-      },
-      {
-        field: "actions",
-        type: "actions",
-        headerName: "Actions",
-        width: 120,
-        cellClassName: "actions",
-        getActions: ({ id }) => {
-          const index = Number(id);
-          return [
-            <GridActionsCellItem
-              icon={<EditIcon />}
-              label="Edit"
-              onClick={() => handleEditEntry(index)}
-              color="inherit"
-            />,
-            <GridActionsCellItem
-              icon={<DeleteIcon />}
-              label="Delete"
-              onClick={() => handleDeleteEntry(index)}
-              color="inherit"
-            />,
-          ];
-        },
-      },
-    ],
-    [handleEditEntry, handleDeleteEntry]
+  console.log('📊 === CURRENT APP STATE ===');
+  console.log('📈 Summary:', {
+    tabsCount: tabs.length,
+    groupsCount: groups.length,
+    activeGroupId,
+    activeFileId,
+    activeGroup: activeGroup?.baseFileName,
+    activeFile: activeFile?.fileName,
+  });
+  console.log(
+    '📁 All loaded files:',
+    tabs.map(t => ({
+      fileName: t.fileName,
+      baseFileName: t.baseFileName,
+      language: t.language,
+      id: t.id,
+    })),
+  );
+  console.log(
+    '🗂️ All groups:',
+    groups.map(g => ({
+      id: g.id,
+      baseFileName: g.baseFileName,
+      fileCount: g.files.length,
+      activeFileId: g.activeFileId,
+      files: g.files.map(f => ({ fileName: f.fileName, id: f.id })),
+    })),
   );
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      <AppBar position="sticky" sx={{ zIndex: 1300 }}>
-        <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            RESX Editor{" "}
-            {currentFile ? `- ${currentFile.split("\\").pop()}` : ""}
-          </Typography>
-          <Button
-            color="inherit"
-            startIcon={<FolderOpenIcon />}
-            onClick={handleOpenFile}
-            disabled={isLoading}
-          >
-            Open
-          </Button>
-          <Button
-            color="inherit"
-            startIcon={<SaveIcon />}
-            onClick={handleSaveFile}
-            disabled={!currentFile || isLoading}
-          >
-            Save
-          </Button>
-          <Button
-            color="inherit"
-            startIcon={<AddIcon />}
-            onClick={handleAddEntry}
-            disabled={!currentFile || isLoading}
-          >
-            Add Entry
-          </Button>
-        </Toolbar>
-      </AppBar>
-
-      <Box sx={{ flex: 1, overflow: "hidden", p: 2 }}>
-        {isLoading ? (
-          <Box
-            display="flex"
-            justifyContent="center"
-            alignItems="center"
-            height="100%"
-          >
-            <CircularProgress />
-          </Box>
-        ) : entries.length > 0 ? (
-          <Box sx={{ height: "100%", width: "100%" }}>
-            <DataGrid
-              rows={entries.map((entry, index) => ({
-                id: index,
-                name: entry["@_name"],
-                value: entry.value,
-                comment: entry.comment || "",
-              }))}
-              columns={columns}
-              initialState={{
-                pagination: {
-                  paginationModel: { page: 0, pageSize: 25 },
-                },
-              }}
-              pageSizeOptions={[25, 50, 100]}
-              disableRowSelectionOnClick
-              sx={{
-                "& .MuiDataGrid-columnHeaders": {
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 1200,
-                  backgroundColor: "background.paper",
-                },
-                "& .MuiDataGrid-cell": {
-                  whiteSpace: "normal",
-                  wordWrap: "break-word",
-                  maxHeight: "none !important",
-                  overflow: "visible !important",
-                  lineHeight: "1.2 !important",
-                  alignItems: "flex-start",
-                  paddingTop: "8px",
-                  paddingBottom: "8px",
-                },
-                "& .MuiDataGrid-row": {
-                  maxHeight: "none !important",
-                },
-                "& .MuiDataGrid-renderingZone": {
-                  maxHeight: "none !important",
-                },
-              }}
-            />
-          </Box>
-        ) : (
-          <Box
-            display="flex"
-            justifyContent="center"
-            alignItems="center"
-            height="100%"
-          >
-            <Typography variant="h6" color="textSecondary">
-              {currentFile
-                ? "No entries found"
-                : "Open a RESX file to get started"}
-            </Typography>
-          </Box>
-        )}
-      </Box>
-
-      {/* Edit Entry Dialog */}
-      <Dialog
-        open={!!editingEntry}
-        onClose={() => setEditingEntry(null)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          {(editingEntry?.index ?? -1) >= 0 ? "Edit Entry" : "Add Entry"}
-        </DialogTitle>
-        <DialogContent>
-          <Box component="form" sx={{ mt: 2 }}>
-            <TextField
-              margin="normal"
-              required
-              fullWidth
-              label="Name"
-              value={editingEntry?.entry["@_name"] || ""}
-              onChange={(e) =>
-                setEditingEntry((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        entry: { ...prev.entry, "@_name": e.target.value },
-                      }
-                    : null
-                )
-              }
-            />
-            <TextField
-              margin="normal"
-              required
-              fullWidth
-              multiline
-              rows={4}
-              label="Value"
-              value={editingEntry?.entry.value || ""}
-              onChange={(e) =>
-                setEditingEntry((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        entry: { ...prev.entry, value: e.target.value },
-                      }
-                    : null
-                )
-              }
-            />
-            <TextField
-              margin="normal"
-              fullWidth
-              multiline
-              rows={2}
-              label="Comment"
-              value={editingEntry?.entry.comment || ""}
-              onChange={(e) =>
-                setEditingEntry((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        entry: { ...prev.entry, comment: e.target.value },
-                      }
-                    : null
-                )
-              }
-            />
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setEditingEntry(null)}>Cancel</Button>
-          <Button
-            onClick={handleSaveEntry}
-            variant="contained"
-            disabled={
-              !editingEntry?.entry["@_name"] || !editingEntry?.entry.value
-            }
-          >
-            Save
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Snackbar for messages */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-      >
-        <Alert
-          onClose={handleCloseSnackbar}
-          severity={snackbar.severity as any}
-          sx={{ width: "100%" }}
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Container maxWidth="lg" sx={{ py: 2 }}>
+        {/* Compact Header */}
+        <Paper
+          elevation={3}
+          sx={{
+            p: 2,
+            mb: 2,
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          }}
         >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
-    </Box>
+          <Typography
+            variant="h5"
+            component="h1"
+            align="center"
+            sx={{
+              color: 'white',
+              textShadow: '2px 2px 4px rgba(0,0,0,0.3)',
+              mb: 0.5,
+              fontWeight: 600,
+            }}
+          >
+            Multi-File RESX Editor
+          </Typography>
+          <Typography
+            variant="body2"
+            align="center"
+            sx={{
+              color: 'rgba(255,255,255,0.9)',
+              fontSize: '0.95rem',
+            }}
+          >
+            Upload, edit, and manage multiple .NET resource files with language grouping
+          </Typography>
+        </Paper>
+
+        {/* Compact Upload Section */}
+        <Box sx={{ mb: 2 }}>
+          <FileUpload
+            onFileUpload={handleFileUpload}
+            onUploadStart={handleUploadStart}
+            onDebugClick={handleDebugClick}
+            uploadedFileCount={tabs.length}
+          />
+        </Box>
+
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+
+        {/* File Group Tabs */}
+        <FileGroupTabs
+          groups={groups}
+          activeGroupId={activeGroupId}
+          onGroupChange={handleGroupChange}
+        />
+
+        {/* File Sub Tabs (only shown if group has multiple files) */}
+        {activeGroup && (
+          <FileSubTabs
+            files={activeGroup.files}
+            activeFileId={activeFileId}
+            onFileChange={handleFileChange}
+          />
+        )}
+
+        {/* Expanded Data Grid Area */}
+        <Box sx={{ mb: 2 }}>
+          <ResxDataGrid
+            rows={activeFile?.rows || []}
+            onRowsChange={handleRowsChange}
+            fileName={activeFile?.fileName}
+            onDownload={handleDownloadCurrentFile}
+          />
+        </Box>
+
+        {activeFile && (
+          <DownloadButton
+            rows={activeFile.rows}
+            fileName={activeFile.originalFileName}
+            disabled={activeFile.rows.length === 0}
+          />
+        )}
+
+        <Box sx={{ mt: 2, textAlign: 'center' }}>
+          <Typography variant="caption" color="text.secondary">
+            Built with React, TypeScript, and Material UI • File grouping enabled
+          </Typography>
+        </Box>
+
+        {/* Debug Dialog */}
+        <Dialog open={debugDialogOpen} onClose={handleDebugClose} maxWidth="md" fullWidth>
+          <DialogTitle>
+            <Box display="flex" justifyContent="space-between" alignItems="center">
+              <Typography variant="h6">Debug Information</Typography>
+              <IconButton onClick={handleDebugClose} size="small">
+                <Close />
+              </IconButton>
+            </Box>
+          </DialogTitle>
+          <DialogContent>
+            <Paper sx={{ p: 2, backgroundColor: 'grey.50' }}>
+              <Typography variant="body2" component="div" sx={{ fontFamily: 'monospace' }}>
+                <strong>📊 Application State:</strong>
+                <br />
+                📁 {tabs.length} files loaded, {groups.length} groups created
+                <br />
+                🎯 Active: {activeGroup?.baseFileName || 'none'} / {activeFile?.fileName || 'none'}
+                <br />
+                <br />
+                <strong>📋 Loaded Files:</strong>
+                <br />
+                {tabs.length > 0
+                  ? tabs.map((t, index) => (
+                      <span key={t.id}>
+                        {index + 1}. {t.fileName} (base: {t.baseFileName}, lang: {t.language})
+                        <br />
+                      </span>
+                    ))
+                  : 'No files loaded'}
+                <br />
+                <strong>🗂️ File Groups:</strong>
+                <br />
+                {groups.length > 0
+                  ? groups.map((g, index) => (
+                      <span key={g.id}>
+                        {index + 1}. {g.baseFileName} ({g.files.length} files)
+                        <br />
+                        {g.files.map((f, fIndex) => (
+                          <span key={f.id} style={{ marginLeft: '20px' }}>
+                            {fIndex + 1}.{fIndex + 1} {f.fileName} ({f.language})
+                            {f.id === g.activeFileId && ' ← active'}
+                            <br />
+                          </span>
+                        ))}
+                        <br />
+                      </span>
+                    ))
+                  : 'No groups created'}
+              </Typography>
+            </Paper>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleDebugClose} variant="contained">
+              Close
+            </Button>
+          </DialogActions>
+        </Dialog>
+      </Container>
+    </ThemeProvider>
   );
 }
 

@@ -51,7 +51,9 @@
     "@mui/icons-material": "^7.2.0",
     "@mui/lab": "^7.0.0-beta.14",
     "@mui/material": "^7.2.0",
+    "@mui/x-data-grid": "^8.7.0",
     "@mui/x-date-pickers": "^8.7.0",
+    "fast-xml-parser": "^5.2.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
@@ -67,7 +69,7 @@
     "electron-builder": "^26.0.12",
     "mkdirp": "^3.0.1",
     "typescript": "^5.8.3",
-    "vite": "^7.0.2",
+    "vite": "^7.0.3",
     "wait-on": "^8.0.3"
   }
 }

@@ -1,0 +1,73 @@
+{
+  "name": "resx-editor",
+  "version": "1.0.0",
+  "description": "Electron app with React, TypeScript, Vite, and MUI",
+  "main": "dist/main/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:vite\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
+    "dev:vite": "vite src/renderer",
+    "dev:electron": "cross-env NODE_ENV=development electron --no-warnings .",
+    "build": "npm run build:vite && npm run build:electron",
+    "build:vite": "vite build src/renderer",
+    "build:electron": "tsc -p tsconfig.node.json && mkdirp dist/preload && copyfiles -u 1 src/preload/*.js dist/preload/ && tsc -p tsconfig.preload.json && node scripts/fix-imports.js",
+    "build:app": "npm run build && electron-builder",
+    "preview": "vite preview src/renderer",
+    "postinstall": "electron-builder install-app-deps",
+    "clean": "rimraf dist",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx"
+  },
+  "build": {
+    "appId": "com.example.resxeditor",
+    "productName": "RESX Editor",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.2.0",
+    "@mui/lab": "^7.0.0-beta.14",
+    "@mui/material": "^7.2.0",
+    "@mui/x-date-pickers": "^8.7.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.10",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "concurrently": "^9.2.0",
+    "copyfiles": "^2.4.1",
+    "cross-env": "^7.0.3",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
+    "mkdirp": "^3.0.1",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.2",
+    "wait-on": "^8.0.3"
+  }
+}
